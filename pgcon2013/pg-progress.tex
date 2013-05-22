@@ -1,0 +1,566 @@
+\documentclass{beamer}
+
+\usepackage[utf8]{inputenc}
+
+\usetheme{Warsaw}
+
+\useoutertheme{infolines}
+\setbeamertemplate{blocks}[default]
+\setbeamertemplate{items}[triangle]
+\setbeamertemplate{sections/subsections in toc}[square]
+
+\AtBeginSubsection[]
+{
+  \begin{frame}{Outline}
+    \tableofcontents[sectionstyle=show/shaded,subsectionstyle=show/shaded/hide]
+  \end{frame}
+}
+
+\title{Estimating query progress}
+\subtitle{Theory and practice of query progress indication}
+\author[Jan Urbański]{Jan Urbański \\ \texttt{j.urbanski@wulczer.org}}
+\institute{Ducksboard}
+\date[PGCon 2013]{PGCon 2013, Ottawa, May 24}
+
+\begin{document}
+
+\frame{\titlepage}
+
+
+\begin{frame}[fragile]
+  \frametitle{For those following at home}
+
+  \begin{block}{Getting the slides}
+    \begin{semiverbatim}
+    \$ wget http://wulczer.org/pg-progress.pdf
+    \end{semiverbatim}
+  \end{block}
+
+  \begin{block}{Trying the code\alert{*}}
+    \begin{semiverbatim}
+    \$ git clone git://github.com/wulczer/pg-progress.git
+    \$ cd pg-progress && make install
+    \$ psql -c 'create extension progress'
+    \$ ./show-progress.py -c 'table tab1' dbname=progress
+    \end{semiverbatim}
+  \end{block}
+
+  {\tiny\alert{*} requires modified Postgres from git://github.com/wulczer/postgres/tree/progress-rebasing}
+\end{frame}
+
+\begin{frame}
+  \tableofcontents
+\end{frame}
+
+\section{Problem}
+\subsection{Problem statement}
+
+\begin{frame}
+\begin{beamercolorbox}[center]{note}
+  \Huge Should I kill it yet?
+\end{beamercolorbox}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Usefulness of progress estimation}
+
+  \begin{itemize}
+  \item Postgres gives no feedback for running queries
+  \item it's hard to decide how much more time will a query take
+  \item the decision between cancelling a heavyweight query and letting it
+    complete is uninformed
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{The devil is in the details}
+
+  \begin{itemize}
+  \item while the use case is straightforward, the details are not
+  \item what should be an estimator's output?
+    \begin{itemize}
+    \item ``work done''
+    \item percentage completed
+    \item time remaining
+    \end{itemize}
+  \item how should the estimation be relayed to the outside
+  \end{itemize}
+\end{frame}
+
+\subsection{Qualities of a good estimator}
+
+\begin{frame}
+  \frametitle{What makes a good estimator}
+
+  \begin{itemize}
+  \item monotonicity
+  \item granularity
+  \item low computation overhead
+  \item independence from hardware speed
+  \end{itemize}
+\end{frame}
+
+\section{Theory}
+\subsection{Model of work for query execution}
+
+\begin{frame}
+  \frametitle{Existing research}
+
+  The basic idea explained here comes from a research paper by Surajit
+  Chaudhuri and Vivek Narasayya from Microsoft Research and Ravi Ramamurthy
+  from the University of Wisconsin.
+
+  \bigskip
+
+  \begin{thebibliography}{Chaudhuri 2004}
+
+  \bibitem[Chaudhuri 2004]{chaudhuri}
+    Chaudhuri, Surajit and Narasayya, Vivek and Ramamurthy, Ravishankar.
+    \newblock Estimating progress of SQL queries.
+    \newblock {\em SIGMOD '04}, 803--814, 2004.
+
+  \end{thebibliography}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Model of work}
+
+  \begin{itemize}
+  \item query progress is expressed as the number tuples returned from all
+    execution node
+  \item that's called the GetNext() model in the paper
+  \item a query is completed when all nodes have finished returning tuples
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Estimator definition}
+
+  \begin{block}{GetNext() model estimator}
+    Assume the execution plan has $m$ nodes.
+
+    \bigskip
+
+    For $i = 1..m$, we define \alert<3>{$N_{i}$} as the number of tuples that
+    it \alert<3>{will return} and \alert<2>{$K_{i}$} as the number of tuples it
+    \alert<2>{has already returned}.
+
+    \bigskip
+
+    The estimator we'll use is
+    \begin{equation*}
+      gnm = \frac{\sum\limits_{i=1}^{m} \alert<2>{K_{i}}}
+      {\sum\limits_{i=1}^{m} \alert<3,4>{N_{i}}}
+    \end{equation*}
+
+    \bigskip
+
+    \uncover<4->{The basic challenge is estimating \alert{$N_{i}$}.}
+  \end{block}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Properties of $gnm$}
+
+  \begin{itemize}
+  \item kind of, sort of computable in Postgres :)
+  \item reasonably straightforward definition
+  \item can work off planner estimates, most of the necessary info is already
+    begin collected
+  \item monotonous (usually), fine-grained
+  \item but planner estimates can be wrong, especially with joins present
+  \end{itemize}
+\end{frame}
+
+\subsection{Execution pipelines}
+
+\begin{frame}
+  \frametitle{The pipeline concept}
+
+  \begin{block}{Pipeline definition}
+    An execution pipeline is the maximal execution plan subtree that executes
+    concurrently.
+  \end{block}
+
+  \bigskip
+
+  You can think of a pipeline as the set of execution nodes that will be run
+  for the pipeline root to produce one tuple.
+\end{frame}
+
+\begin{frame}
+  \frametitle{Constructing pipelines}
+
+  \begin{itemize}
+  \item execution plan leaves start new pipelines
+  \item nodes like Sort or Hash start new pipelines
+  \item joins combine the pipelines of their children
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Pipeline examples}
+
+  A simple query plan with one pipeline looks like this:
+  \begin{center}
+    \includegraphics[height=3in]{pipelines-1.pdf}
+  \end{center}
+\end{frame}
+
+\begin{frame}<1>[label=several-pipelines]
+  \frametitle{Pipeline examples cont.}
+
+  A plan with several pipelines:
+  \begin{center}
+    \includegraphics[height=3in]{pipelines-2.pdf}
+  \end{center}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Pipeline examples cont.}
+
+  Another example:
+  \begin{center}
+    \includegraphics[height=3in]{pipelines-3.pdf}
+  \end{center}
+\end{frame}
+
+\subsection{Driver node estimator}
+
+\begin{frame}
+  \frametitle{Driver nodes}
+
+  \begin{block}{Driver node definition}
+    Driver nodes are leaf nodes of pipelines, except for nodes in the inner
+    subtree of a Nested Loops join.
+  \end{block}
+
+  \bigskip
+
+  Conceptually, driver nodes are the ones that \alert{drive} the pipeline,
+  supplying it with tuples.
+
+  \bigskip
+
+  Because of that, they are better suited to estimate the progress of a
+  pipeline than the rest of its nodes.
+\end{frame}
+
+\begin{frame}
+  \frametitle{Driver node hypothesis}
+
+  \begin{block}{Estimating progress of a running pipeline}
+    For pipelines with one driver node that are in progress, we use the
+    \alert{driver node hypothesis}, which says that
+
+    \bigskip
+
+    \begin{equation*}
+      \frac{\sum\limits_{i=1}^{m} K_{i}}{\sum\limits_{i=1}^{m} N_{i}} \approx \frac{K_{1}}{N_{1}}
+    \end{equation*}
+  \end{block}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Unstarted and finished pipelines}
+
+  \begin{block}{Estimating progress of other pipelines}
+
+    For pipelines that are already \alert{finished}, we know
+    \begin{equation*}
+      \sum\limits_{i=1}^{m} K_{i} = \sum\limits_{i=1}^{m} N_{i}
+    \end{equation*}
+
+    For pipelines that are \alert{not yet started}, we use
+    \begin{equation*}
+      \sum\limits_{i=1}^{m} K_{i} = 0 , \quad \sum\limits_{i=1}^{m} N_{i} = planner\;estimate
+    \end{equation*}
+  \end{block}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Final estimator}
+
+  \begin{block}{GetNext() estimator with pipelines}
+    For a query comprising $s$ pipelines, the final estimator definition is
+
+    \begin{equation*}
+      gnm = \frac{\sum\limits_{i \in P1} K_{i} + ... + \sum\limits_{i \in Ps} K_{i}}
+      {\sum\limits_{i \in P1} N_{i} + ... + \sum\limits_{i \in Ps} N_{i}}
+    \end{equation*}
+  \end{block}
+\end{frame}
+
+\section{Practice}
+\subsection{Implementation}
+
+\begin{frame}[fragile]
+  \frametitle{Concepts inside the executor}
+
+  \begin{itemize}
+  \item the executor works with a tree structure
+  \item the executor tree mirrors the plan tree node for node
+  \item each node has a method to produce a tuple or NULL if it's finished
+  \item executing the plan is repeatedly fetching a tuple from the root node
+  \end{itemize}
+
+  \begin{block}<2->{Executing a query}
+    \begin{semiverbatim}
+      while (true) \{
+          tup = ExecProcNode(root);
+          if (tup == NULL)
+              break;
+          emit(tup);
+      \}
+    \end{semiverbatim}
+  \end{block}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Individual node execution}
+
+  \begin{itemize}
+  \item each node has its own execution method
+    \begin{itemize}
+    \item for Sequential Scans it fetches the next tuple from the heap
+    \item for Materialization it fetches and stores the next tuple from its
+      child node
+    \item for Sort it stores \alert{all} the tuples from its child node, sorts
+      them and returns the top one
+    \end{itemize}
+  \item nodes can carry additional instrumentation, that gets updated when they
+    are executed
+  \item each executor node has a link to the correspoding planner node, where
+    estimates are kept
+  \end{itemize}
+\end{frame}
+
+\againframe<2->{several-pipelines}
+
+\begin{frame}
+  \frametitle{Implementation idea}
+
+  \begin{enumerate}
+  \item minimally intrusive with regards to Postgres code
+  \item at executor startup, determine pipelines and driver nodes
+  \item when asked to estimate the progress
+    \begin{enumerate}
+    \item walk all pipelines
+    \item calculate $K_{P}$ and $N_{P}$ for each of them
+    \end{enumerate}
+  \item return the sum of $K_{P}$ divided by the sum of $N_{P}$
+  \item use the opportunity to draw a graph of the execution tree and annotate
+    it with progress information for each node
+  \end{enumerate}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Calculating pipeline states}
+
+\begin{block}{Processing a pipeline}
+\begin{semiverbatim}
+\uncover<1->{  \alert<1>{k, n} = 0;}
+\uncover<1->{  for node in pipeline \{}
+\uncover<1->{      k += tuples\_processed(node);}
+\uncover<1->{      n += tuples\_estimated(node);}
+\uncover<1->{  \}}
+\uncover<2->{  if (all(pipeline->driver\_nodes, FINISHED))}
+\uncover<2->{      return \alert<2>{k, k};}
+\uncover<3->{  else if (any(pipeline->driver\_nodes, STARTED))}
+\uncover<3->{      return \alert<3>{k, k * dne(pipeline)};}
+\uncover<4->{  else}
+\uncover<4->{      return \alert<4>{0, n};}
+\end{semiverbatim}
+\end{block}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Communicating with the query backend}
+
+  \begin{itemize}
+  \item needed a way to get information from a backend running the query
+  \item not trivial, since the backend is busy producing the result
+  \item introduce a custom signal handler based on a patch from Simon Riggs
+  \item on next CHECK\_FOR\_INTERRUPTS(), calculate progress and put in shared
+    memory
+  \item signalling backend can then grab results from shmem
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Changes to core Postgres}
+  From least to most controversial.
+
+  \begin{itemize}
+  \item bulk of the logic is implemented as a Postgres extension
+  \item ability to store private data in the main executor structure
+  \item hooks for executor node instrumentation
+  \item a hook for running user code on SIGUSR1
+  \end{itemize}
+\end{frame}
+
+\subsection{Hurdles}
+
+\begin{frame}
+  \frametitle{Not everything went as smoothly...}
+
+  \begin{itemize}
+  \item multiple driver nodes in a pipeline
+  \item nodes being executed multiple times
+  \item node with more than two children (e.g. Append)
+  \item subselect, function scans, recursive queries...
+  \item poor planner estimates
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Some solutions}
+
+  \begin{itemize}
+  \item for a pipeline with $D$ driver nodes, the estimator is using
+    \begin{equation*}
+      K = \frac{\sum\limits_{i=1}^{D} K_{i}}{D}, \quad N = \min\limits_{i=1,\dots D} N_{i}
+    \end{equation*}
+  \item for Nested Loops, the estimated tuple counts of inner child nodes are
+    multiplied by estimated outer child tuple count
+  \item nodes with more than 2 children are simply assumed blocking and start
+    their own pipeline
+  \item some nodes are not supported at all (for instance Recursive Union)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Refining estimates}
+
+  \begin{itemize}
+  \item the original paper puts a lot of value in refining estimates as the
+    query progresses
+  \item each node has a lower and an upper bound for its $N$ value
+  \item those bounds are refined as execution progresses:
+    \begin{itemize}
+    \item Sort or Hash nodes will never increase carditality
+    \item when an outer child of a Nested Loops join outputs more tuples than
+      expected, recalculate the expected number of loops in the inner subtree
+    \item Merge joins will stop as soon as they finish processing one of their
+      inputs
+    \end{itemize}
+  \item a missing feature for now
+  \end{itemize}
+\end{frame}
+
+\subsection{What next?}
+
+\begin{frame}
+  \frametitle{Annoyances}
+
+  \begin{itemize}
+  \item correctly identifying pipelines and driver nodes (lots of different
+    nodes types to think about)
+  \item detecting if a pipeline has started or has finished
+    \begin{itemize}
+    \item annoyingly tricky
+    \item nodes can be executed several times, for example in a Nested Loops
+      outer tree
+    \end{itemize}
+  \item no visibility into a Sort node progress
+    \begin{itemize}
+    \item important, because Sort nodes are driver nodes
+    \end{itemize}
+  \item using shared memory to relay estimates to other backends
+    \begin{itemize}
+    \item haven't even considered the security implications yet...
+    \end{itemize}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Rescanning nodes}
+
+  \begin{itemize}
+  \item the executor has a concept of rescanning a node
+  \item some nodes are very cheap to rescan, for example Materialization nodes
+  \item they will show a large number for tuples returned, but the real work
+    was just scanning the child node once
+  \item need to consider number of loops manually, since the planner accounts
+    for them internally and does not expose the total estimated number of
+    tuples
+  \item not acconuted for in the original paper at all
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{The ``single outer tuple'' problem}
+
+  \begin{itemize}
+  \item a common situation is a Nested Loops scan estimating a single outer
+    tuple
+  \item if the outer child returns more than one tuple, the entire inner
+    subtree is rescanned
+  \item arguably a planner failure, but because the outer child can end up
+    being the only driver node of a large pipeline, estimates are all wrong
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{``Single output tuple'' example}
+
+  This tree has only one driver node, which leads to imprecision
+  \begin{center}
+    \includegraphics[height=3in]{pipelines-1.pdf}
+  \end{center}
+\end{frame}
+
+\begin{frame}
+  \frametitle{MultiExecProcNode}
+
+  \begin{itemize}
+  \item some nodes are ``special'' and don't follow the $GetNext()$ model
+    \begin{itemize}
+    \item Hash nodes build the entire hashtable in one go
+    \item Bitmap index scans scan the entire index when building the bitmap
+    \end{itemize}
+  \item if they'd be just blocking, it wouldn't have been a problem
+  \item being outside of $GetNext()$ means no visibility into their progress
+  \item particularily bad when they're driver nodes
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Utility commands}
+
+  \begin{itemize}
+  \item this model does not allow estimating the progress of utility commands
+    in any way
+  \item things like COPY, VACUUM, CREATE INDEX, ANALYSE
+  \item a shame, since these are just the kinds of statements that often would
+    benefit from estimation
+  \item possibly a hybrid approach would work, special-casing utility
+    statements
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Current state}
+
+  \begin{itemize}
+  \item requires small changes to core Postgres, but some are controversial
+  \item gives some useful information at least
+  \item the driver node estimator looks like an interesting metric to use
+  \item could be reimplemented as returning just raw execution data and let
+    other tools calculate a single progress value
+  \item graphical dumps are more a debugging tool, should probably use
+    EXPLAIN-ish format and external tools could transform it into images
+  \item need to implement estimate refining
+  \item for the time being, a proof of concept
+  \end{itemize}
+\end{frame}
+
+\subsection*{Questions}
+
+\begin{frame}
+\begin{beamercolorbox}[center]{note}
+  \Huge Questions?
+\end{beamercolorbox}
+\end{frame}
+
+\end{document}

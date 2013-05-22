@@ -1,0 +1,14 @@
+digraph progress {
+    ranksep = 0.3;
+    P0x2ae2c98 [label=<(P0)<br/>IndexScan<br/>>, fillcolor="#cdcdcd", style=filled];
+    P0x2ae36f0 [label=<(P0)<br/>IndexScan<br/>>, fillcolor="#cdcdcd", style=filled];
+    P0x2ae2940 [label=<(P0)<br/>MergeJoin<br/>>];
+    P0x2ae2940 -> P0x2ae2c98;
+    P0x2ae2940 -> P0x2ae36f0;
+    P0x2af0e38 [label=<(P0)<br/>SeqScan<br/>>];
+    P0x2af0c38 [label=<(P0)<br/>Material<br/>>];
+    P0x2af0c38 -> P0x2af0e38;
+    P0x2ae2660 [label=<(P0)<br/>NestLoop<br/>>];
+    P0x2ae2660 -> P0x2ae2940;
+    P0x2ae2660 -> P0x2af0c38;
+}
