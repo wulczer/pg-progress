@@ -2,11 +2,13 @@
 
 \usepackage[utf8]{inputenc}
 
-\usetheme{Warsaw}
+\usetheme{CambridgeUS}
+\usecolortheme{rose}
 
 \useoutertheme{infolines}
 \setbeamertemplate{blocks}[default]
 \setbeamertemplate{items}[triangle]
+\setbeamertemplate{enumerate items}[square]
 \setbeamertemplate{sections/subsections in toc}[square]
 
 \AtBeginSubsection[]
@@ -25,7 +27,6 @@
 \begin{document}
 
 \frame{\titlepage}
-
 
 \begin{frame}[fragile]
   \frametitle{For those following at home}
@@ -84,6 +85,9 @@
     \item time remaining
     \end{itemize}
   \item how should the estimation be relayed to the outside
+    \begin{itemize}
+    \item the backend running the query is busy... running the query
+    \end{itemize}
   \end{itemize}
 \end{frame}
 
@@ -92,16 +96,59 @@
 \begin{frame}
   \frametitle{What makes a good estimator}
 
-  \begin{itemize}
-  \item monotonicity
-  \item granularity
-  \item low computation overhead
-  \item independence from hardware speed
-  \end{itemize}
+  \begin{description}[hardware independence]
+  \item[monotonicity] the estimator's value should always grow
+  \item[granularity] estimates should vary even small time increments
+  \item[low overhead] calculating progress should not be prohibitively
+    expensive
+  \item[hardware independence] changes in the estimates should not depend on
+    how fast the system is
+  \end{description}
 \end{frame}
 
 \section{Theory}
 \subsection{Model of work for query execution}
+
+\begin{frame}[fragile]
+  \frametitle{Concepts inside the executor}
+
+  \begin{itemize}
+  \item the executor works with a tree structure
+  \item the executor tree mirrors the plan tree node for node
+  \item each node has a method to produce a tuple or NULL if it's finished
+  \item executing the plan is repeatedly fetching a tuple from the root node
+  \end{itemize}
+
+  \begin{block}<2->{Executing a query}
+    \begin{semiverbatim}
+      while (true) \{
+          tup = ExecProcNode(root);
+          if (tup == NULL)
+              break;
+          emit(tup);
+      \}
+    \end{semiverbatim}
+  \end{block}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Individual node execution}
+
+  \begin{itemize}
+  \item each node has its own execution method
+    \begin{itemize}
+    \item for Sequential Scans it fetches the next tuple from the heap
+    \item for Materialization it fetches and stores the next tuple from its
+      child node
+    \item for Sort it stores \alert{all} the tuples from its child node, sorts
+      them and returns the top one
+    \end{itemize}
+  \item nodes can carry additional instrumentation, that gets updated when they
+    are executed
+  \item each executor node has a link to the correspoding planner node, where
+    estimates are kept
+  \end{itemize}
+\end{frame}
 
 \begin{frame}
   \frametitle{Existing research}
@@ -127,7 +174,7 @@
 
   \begin{itemize}
   \item query progress is expressed as the number tuples returned from all
-    execution node
+    execution nodes
   \item that's called the GetNext() model in the paper
   \item a query is completed when all nodes have finished returning tuples
   \end{itemize}
@@ -166,7 +213,7 @@
   \item kind of, sort of computable in Postgres :)
   \item reasonably straightforward definition
   \item can work off planner estimates, most of the necessary info is already
-    begin collected
+    being collected
   \item monotonous (usually), fine-grained
   \item but planner estimates can be wrong, especially with joins present
   \end{itemize}
@@ -294,54 +341,13 @@
 \section{Practice}
 \subsection{Implementation}
 
-\begin{frame}[fragile]
-  \frametitle{Concepts inside the executor}
-
-  \begin{itemize}
-  \item the executor works with a tree structure
-  \item the executor tree mirrors the plan tree node for node
-  \item each node has a method to produce a tuple or NULL if it's finished
-  \item executing the plan is repeatedly fetching a tuple from the root node
-  \end{itemize}
-
-  \begin{block}<2->{Executing a query}
-    \begin{semiverbatim}
-      while (true) \{
-          tup = ExecProcNode(root);
-          if (tup == NULL)
-              break;
-          emit(tup);
-      \}
-    \end{semiverbatim}
-  \end{block}
-\end{frame}
-
-\begin{frame}
-  \frametitle{Individual node execution}
-
-  \begin{itemize}
-  \item each node has its own execution method
-    \begin{itemize}
-    \item for Sequential Scans it fetches the next tuple from the heap
-    \item for Materialization it fetches and stores the next tuple from its
-      child node
-    \item for Sort it stores \alert{all} the tuples from its child node, sorts
-      them and returns the top one
-    \end{itemize}
-  \item nodes can carry additional instrumentation, that gets updated when they
-    are executed
-  \item each executor node has a link to the correspoding planner node, where
-    estimates are kept
-  \end{itemize}
-\end{frame}
-
-\againframe<2->{several-pipelines}
-
 \begin{frame}
   \frametitle{Implementation idea}
 
+  The idea was to make the implementation minimally intrusive with regards to
+  Postgres code.
+
   \begin{enumerate}
-  \item minimally intrusive with regards to Postgres code
   \item at executor startup, determine pipelines and driver nodes
   \item when asked to estimate the progress
     \begin{enumerate}
@@ -389,7 +395,8 @@
 
 \begin{frame}
   \frametitle{Changes to core Postgres}
-  From least to most controversial.
+
+  From least to most controversial:
 
   \begin{itemize}
   \item bulk of the logic is implemented as a Postgres extension
