@@ -93,27 +93,12 @@ def process_dot_files(opts):
         sys.stderr.write('[*] no snapshots\n')
         return
 
-    cmd = ['dot', '-Tpng', '-O'] + fnames
+    cmd = ['dot', '-Tpdf', '-O'] + fnames
     subprocess.check_output(cmd, stderr=subprocess.STDOUT)
 
-    for i, fname in enumerate(fnames, 1):
-        pngname = os.extsep.join((fname, 'png'))
-        temp = tempfile.NamedTemporaryFile()
-        cmd = ['convert', '-gravity', 'northwest',
-               '-pointsize', '30',
-               '-splice', '40x40', '-annotate', '+20+20',
-               '%d/%d' % (i, len(fnames)), pngname, temp.name]
-        subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-
-        temp.seek(0)
-        open(pngname, 'w').write(temp.read())
-        temp.close()
-
-    cmd = ['convert']
-    for fname in fnames:
-        pngname = os.extsep.join((fname, 'png'))
-        cmd.extend(['-delay', '20', pngname])
-    cmd.append(os.path.join(opts.output, 'snapshot.gif'))
+    pdfnames = map(lambda fname: os.extsep.join((fname, 'pdf')), fnames)
+    cmd = ['pdfunite'] + pdfnames
+    cmd.append(os.path.join(opts.output, 'snapshot.pdf'))
     subprocess.check_output(cmd, stderr=subprocess.STDOUT)
 
 
