@@ -1,0 +1,16 @@
+digraph progress {
+    ranksep = 0.3;
+    P0x1f9efb0 [label=IndexScan];
+    P0x1fa6940 [label=IndexScan];
+    P0x1fa8348 [label=SeqScan];
+    P0x1fa57d0 [label=NestLoop];
+    P0x1fa57d0 -> P0x1fa6940;
+    P0x1fa57d0 -> P0x1fa8348;
+    P0x1faa2e0 [label=IndexScan];
+    P0x1fa2b48 [label=NestLoop];
+    P0x1fa2b48 -> P0x1fa57d0;
+    P0x1fa2b48 -> P0x1faa2e0;
+    P0x1f9d2f8 [label=NestLoop];
+    P0x1f9d2f8 -> P0x1f9efb0;
+    P0x1f9d2f8 -> P0x1fa2b48;
+}

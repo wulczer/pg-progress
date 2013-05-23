@@ -40,8 +40,7 @@
   \begin{block}{Trying the code\alert{*}}
     \begin{semiverbatim}
     \$ git clone git://github.com/wulczer/pg-progress.git
-    \$ cd pg-progress && make install
-    \$ psql -c 'create extension progress'
+    \$ make install && psql -c 'create extension progress'
     \$ ./show-progress.py -c 'table tab1' dbname=progress
     \end{semiverbatim}
   \end{block}
@@ -98,7 +97,7 @@
 
   \begin{description}[hardware independence]
   \item[monotonicity] the estimator's value should always grow
-  \item[granularity] estimates should vary even small time increments
+  \item[granularity] estimates should vary across small time increments
   \item[low overhead] calculating progress should not be prohibitively
     expensive
   \item[hardware independence] changes in the estimates should not depend on
@@ -148,6 +147,15 @@
   \item each executor node has a link to the correspoding planner node, where
     estimates are kept
   \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Executor tree example}
+
+  An example executor tree looks like this:
+  \begin{center}
+    \includegraphics[height=3in]{executor-tree.pdf}
+  \end{center}
 \end{frame}
 
 \begin{frame}
@@ -225,14 +233,14 @@
   \frametitle{The pipeline concept}
 
   \begin{block}{Pipeline definition}
-    An execution pipeline is the maximal execution plan subtree that executes
+    An execution pipeline is the maximal executor subtree that executes
     concurrently.
   \end{block}
 
   \bigskip
 
-  You can think of a pipeline as the set of execution nodes that will be run
-  for the pipeline root to produce one tuple.
+  You can think of a pipeline as the set of executor nodes that will be run
+  for the pipeline's root node to produce one tuple.
 \end{frame}
 
 \begin{frame}
@@ -246,9 +254,28 @@
 \end{frame}
 
 \begin{frame}
+  \frametitle{Driver nodes}
+
+  \begin{block}{Driver node definition}
+    Driver nodes are leaf nodes of pipelines, except for nodes in the inner
+    subtree of a Nested Loops join.
+  \end{block}
+
+  \bigskip
+
+  Conceptually, driver nodes are the ones that \alert{drive} the pipeline,
+  supplying it with tuples.
+
+  \bigskip
+
+  Because of that, they are better suited to estimate the progress of a
+  pipeline than the rest of its nodes.
+\end{frame}
+
+\begin{frame}
   \frametitle{Pipeline examples}
 
-  A simple query plan with one pipeline looks like this:
+  The same executor tree annotated with pipeline identifiers:
   \begin{center}
     \includegraphics[height=3in]{pipelines-1.pdf}
   \end{center}
@@ -273,25 +300,6 @@
 \end{frame}
 
 \subsection{Driver node estimator}
-
-\begin{frame}
-  \frametitle{Driver nodes}
-
-  \begin{block}{Driver node definition}
-    Driver nodes are leaf nodes of pipelines, except for nodes in the inner
-    subtree of a Nested Loops join.
-  \end{block}
-
-  \bigskip
-
-  Conceptually, driver nodes are the ones that \alert{drive} the pipeline,
-  supplying it with tuples.
-
-  \bigskip
-
-  Because of that, they are better suited to estimate the progress of a
-  pipeline than the rest of its nodes.
-\end{frame}
 
 \begin{frame}
   \frametitle{Driver node hypothesis}
@@ -355,7 +363,7 @@
     \item calculate $K_{P}$ and $N_{P}$ for each of them
     \end{enumerate}
   \item return the sum of $K_{P}$ divided by the sum of $N_{P}$
-  \item use the opportunity to draw a graph of the execution tree and annotate
+  \item use the opportunity to draw a graph of the executor tree and annotate
     it with progress information for each node
   \end{enumerate}
 \end{frame}
