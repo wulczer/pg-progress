@@ -53,7 +53,6 @@ def monitor(connstr, interval, outputdir, dot, waitq, reportq, q):
     while True:
         time.sleep(interval)
         cur.execute('select pg_progress_update(%s)', (query_pid, ))
-        time.sleep(0.05)
 
         if dot:
             cur.execute('select pg_progress_dot()')
