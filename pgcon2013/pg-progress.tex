@@ -139,7 +139,7 @@
     \item for Sequential Scans it fetches the next tuple from the heap
     \item for Materialization it fetches and stores the next tuple from its
       child node
-    \item for Sort it stores \alert{all} the tuples from its child node, sorts
+    \item for Sort it stores \alert{all the tuples} from its child node, sorts
       them and returns the top one
     \end{itemize}
   \item nodes can carry additional instrumentation, that gets updated when they
@@ -196,16 +196,21 @@
 
     \bigskip
 
-    For $i = 1..m$, we define \alert<3>{$N_{i}$} as the number of tuples that
+    For $i = 1..m$, we define \alert<3,4>{$N_{i}$} as the number of tuples that
     it \alert<3>{will return} and \alert<2>{$K_{i}$} as the number of tuples it
     \alert<2>{has already returned}.
 
     \bigskip
 
     The estimator we'll use is
+    %% \begin{equation*}
+    %%   gnm = \frac{\sum\limits_{i=1}^{m} \alert<2>{K_{i}}}
+    %%   {\sum\limits_{i=1}^{m} \alert<3,4>{N_{i}}}
+    %% \end{equation*}
+    %% \vspace{5mm}
     \begin{equation*}
-      gnm = \frac{\sum\limits_{i=1}^{m} \alert<2>{K_{i}}}
-      {\sum\limits_{i=1}^{m} \alert<3,4>{N_{i}}}
+      gnm = \frac{sum\;of\;all\;\alert<2>{tuples\;returned}}
+      {sum\;of\;all\;\alert<3,4>{tuples\;to\;be\;returned}}
     \end{equation*}
 
     \bigskip
@@ -220,9 +225,9 @@
   \begin{itemize}
   \item kind of, sort of computable in Postgres :)
   \item reasonably straightforward definition
+  \item monotonous (usually), fine-grained
   \item can work off planner estimates, most of the necessary info is already
     being collected
-  \item monotonous (usually), fine-grained
   \item but planner estimates can be wrong, especially with joins present
   \end{itemize}
 \end{frame}
@@ -310,8 +315,16 @@
 
     \bigskip
 
+    %% \vspace{2mm}
+
+    %% \begin{equation*}
+    %%   \frac{\sum\limits_{i=1}^{m} K_{i}}{\sum\limits_{i=1}^{m} N_{i}} \approx
+    %%   \frac{K_{1}}{N_{1}}
+    %% \end{equation*}
+    %% \vspace{2mm}
     \begin{equation*}
-      \frac{\sum\limits_{i=1}^{m} K_{i}}{\sum\limits_{i=1}^{m} N_{i}} \approx \frac{K_{1}}{N_{1}}
+      \frac{tuples\;a\;pipeline\;has\;returned}{tuples\;to\;be\;returned} \approx
+      \frac{tuples\;the\;driver\;node\;has\;returned}{tuples\;the\;driver\;node\;will\;return}
     \end{equation*}
   \end{block}
 \end{frame}
@@ -322,13 +335,21 @@
   \begin{block}{Estimating progress of other pipelines}
 
     For pipelines that are already \alert{finished}, we know
+    %% \begin{equation*}
+    %%   \sum\limits_{i=1}^{m} K_{i} = \sum\limits_{i=1}^{m} N_{i}
+    %% \end{equation*}
     \begin{equation*}
-      \sum\limits_{i=1}^{m} K_{i} = \sum\limits_{i=1}^{m} N_{i}
+      tuples\;returned = tuples\;to\;be\;returned
     \end{equation*}
 
+    \bigskip
+
     For pipelines that are \alert{not yet started}, we use
+    %% \begin{equation*}
+    %%   \sum\limits_{i=1}^{m} K_{i} = 0 , \quad \sum\limits_{i=1}^{m} N_{i} = planner\;estimate
+    %% \end{equation*}
     \begin{equation*}
-      \sum\limits_{i=1}^{m} K_{i} = 0 , \quad \sum\limits_{i=1}^{m} N_{i} = planner\;estimate
+      tuples\;returned = 0, \quad tuples\;to\;be\;returned = planned\;estimate
     \end{equation*}
   \end{block}
 \end{frame}
@@ -338,11 +359,18 @@
 
   \begin{block}{GetNext() estimator with pipelines}
     For a query comprising $s$ pipelines, the final estimator definition is
+    \vspace{5mm}
 
+    \begin{equation*}
+      gnm = \frac{sum\;of\;tuples\;\alert{already\;returned}\;for\;each\;pipeline}
+      {sum\;of\;tuples\;\alert{to\;be\;returned}\;for\;each\;pipeline}
+    \end{equation*}
+    \vspace{5mm}
     \begin{equation*}
       gnm = \frac{\sum\limits_{i \in P1} K_{i} + ... + \sum\limits_{i \in Ps} K_{i}}
       {\sum\limits_{i \in P1} N_{i} + ... + \sum\limits_{i \in Ps} N_{i}}
     \end{equation*}
+
   \end{block}
 \end{frame}
 
@@ -433,9 +461,16 @@
 
   \begin{itemize}
   \item for a pipeline with $D$ driver nodes, the estimator is using
-    \begin{equation*}
-      K = \frac{\sum\limits_{i=1}^{D} K_{i}}{D}, \quad N = \min\limits_{i=1,\dots D} N_{i}
-    \end{equation*}
+    %% \begin{equation*}
+    %%   K = \frac{\sum\limits_{i=1}^{D} K_{i}}{D}, \quad N = \min\limits_{i=1,\dots D} N_{i}
+    %% \end{equation*}
+    %% \vspace{2mm}
+    %% \begin{equation*}
+    \begin{align*}
+      K &= average\;amount\;of\;tuples\;returned\;by\;driver\;nodes \\
+      N &= minimum\;estimate\;of\;tuples\;to\;be\;returned
+    \end{align*}
+    %% \end{equation*}
   \item for Nested Loops, the estimated tuple counts of inner child nodes are
     multiplied by estimated outer child tuple count
   \item nodes with more than 2 children are simply assumed blocking and start
@@ -448,7 +483,7 @@
   \frametitle{Refining estimates}
 
   \begin{itemize}
-  \item the original paper puts a lot of value in refining estimates as the
+  \item the original paper puts a lot of emphasis on refining estimates as the
     query progresses
   \item each node has a lower and an upper bound for its $N$ value
   \item those bounds are refined as execution progresses:
@@ -459,7 +494,7 @@
     \item Merge joins will stop as soon as they finish processing one of their
       inputs
     \end{itemize}
-  \item a missing feature for now
+  \item a \alert{missing feature} for now
   \end{itemize}
 \end{frame}
 
